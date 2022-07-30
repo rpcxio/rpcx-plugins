@@ -4,9 +4,10 @@ import (
 	"context"
 	"net"
 
+	"github.com/rpcxio/rpcx-plugins/share"
 	"github.com/smallnest/rpcx/protocol"
 	"github.com/smallnest/rpcx/server"
-	"github.com/smallnest/rpcx/share"
+	rc "github.com/smallnest/rpcx/share"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
@@ -79,7 +80,7 @@ func (p OpenTelemetryPlugin) PreHandleRequest(ctx context.Context, r *protocol.M
 	ctx1, span := p.tracer.Start(ctx0, "rpcx.service."+r.ServicePath+"."+r.ServiceMethod)
 	share.Inject(ctx1, p.propagators)
 
-	ctx.(*share.Context).SetValue(share.OpenTelemetryKey, span)
+	ctx.(*rc.Context).SetValue(share.OpenTelemetryKey, span)
 
 	span.AddEvent("PreHandleRequest")
 

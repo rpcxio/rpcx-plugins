@@ -1,4 +1,4 @@
-module github.com/rpcxio/rpcx-serverplugins
+module github.com/rpcxio/rpcx-plugins
 
 go 1.18
 
