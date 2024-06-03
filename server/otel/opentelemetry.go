@@ -94,13 +94,15 @@ func (p OpenTelemetryPlugin) HandleConnAccept(conn net.Conn) (net.Conn, bool) {
 }
 
 func (p OpenTelemetryPlugin) PreHandleRequest(ctx context.Context, r *protocol.Message) error {
-	spanCtx := share.Extract(ctx, p.propagators)
-	ctx0 := trace.ContextWithSpanContext(ctx, spanCtx)
+	var (
+		span trace.Span
+	)
+	shareContext := ctx.(*rc.Context).Context
 
-	ctx1, span := otel.GetTracerProvider().Tracer(
+	shareContext, span = otel.GetTracerProvider().Tracer(
 		instrumentName,
 	).Start(
-		ctx0,
+		shareContext,
 		"rpcx.service."+r.ServicePath+"."+r.ServiceMethod,
 		trace.WithSpanKind(trace.SpanKindServer),
 	)
@@ -111,15 +113,16 @@ func (p OpenTelemetryPlugin) PreHandleRequest(ctx context.Context, r *protocol.M
 		attribute.String(tracingCommonKeyIpHostname, hostname),
 		attribute.String(tracingCommonKeyIpIntranet, intranetIpStr),
 		semconv.HostName(hostname))
-	share.Inject(ctx1, p.propagators)
-
-	ctx.(*rc.Context).SetValue(share.OpenTelemetryKey, span)
+	shareContext = context.WithValue(shareContext, "RpcXServerTracingHandled", 1)
 
 	span.AddEvent(tracingEventRpcxPreHandleRequest, trace.WithAttributes(
 		attribute.String(tracingEventRpcxPreHandleRequestPath, "rpcx.service."+r.ServicePath+"."+r.ServiceMethod),
 		attribute.String(tracingEventRpcxPreHandleRequestMetadata, fmt.Sprintf("%+v", r.Metadata)),
 		attribute.String(tracingEventRpcxPreHandleRequestPayload, string(r.Payload)),
 	))
+	ctx.(*rc.Context).SetValue(share.OpenTelemetryKey, span)
+	ctx.(*rc.Context).Context = shareContext
+
 	return nil
 }
 
