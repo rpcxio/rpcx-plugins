@@ -2,12 +2,16 @@ package client
 
 import (
 	"context"
+	"fmt"
 
-	"github.com/rpcxio/rpcx-plugins/share"
 	rc "github.com/smallnest/rpcx/share"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/rpcxio/rpcx-plugins/share"
 )
 
 type OpenTelemetryPlugin struct {
@@ -33,9 +37,10 @@ func (p *OpenTelemetryPlugin) PreCall(ctx context.Context, servicePath, serviceM
 	ctx1, span := p.tracer.Start(ctx0, "rpcx.client."+servicePath+"."+serviceMethod)
 	share.Inject(ctx1, p.propagators)
 
+	span.AddEvent("Call", trace.WithAttributes(
+		attribute.String("rpcx.req", fmt.Sprintf("%+v", args)),
+	))
 	ctx.(*rc.Context).SetValue(share.OpenTelemetryKey, span)
-
-	span.AddEvent("PreCall")
 
 	return nil
 }
@@ -44,7 +49,13 @@ func (p *OpenTelemetryPlugin) PostCall(ctx context.Context, servicePath, service
 	span := ctx.Value(share.OpenTelemetryKey).(trace.Span)
 	defer span.End()
 
-	span.AddEvent("PostCall")
-
+	span.SetAttributes(
+		attribute.String("rpcx.resp", fmt.Sprintf("%+v", reply)),
+	)
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+	} else {
+		span.SetStatus(codes.Ok, "success")
+	}
 	return nil
 }
