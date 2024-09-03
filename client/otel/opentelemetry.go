@@ -38,7 +38,7 @@ func NewOpenTelemetryPlugin(tracer trace.Tracer, propagators propagation.TextMap
 	return ret
 }
 
-func (p *OpenTelemetryPlugin) WithMetter(meter metric.Meter) *OpenTelemetryPlugin {
+func (p *OpenTelemetryPlugin) WithMeter(meter metric.Meter) *OpenTelemetryPlugin {
 	p.recorder = GetRecorder(meter, "")
 	return p
 }
