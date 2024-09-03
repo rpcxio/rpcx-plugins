@@ -1,4 +1,4 @@
-module github.com/bububa/rpcx-plugins
+module github.com/rpcxio/rpcx-plugins
 
 go 1.22
 
