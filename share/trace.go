@@ -12,6 +12,7 @@ type OpenTelemetryKeyType int
 
 const (
 	OpenTelemetryKey OpenTelemetryKeyType = iota
+	OpenTelemetryStartTimeKey
 )
 
 type metadataSupplier struct {

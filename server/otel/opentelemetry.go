@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/smallnest/rpcx/protocol"
 	"github.com/smallnest/rpcx/server"
@@ -14,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
 	semconv "go.opentelemetry.io/otel/semconv/v1.18.0"
 	"go.opentelemetry.io/otel/trace"
@@ -30,11 +32,11 @@ var (
 
 type OpenTelemetryPlugin struct {
 	tracer      trace.Tracer
+	recorder    *Recorder
 	propagators propagation.TextMapPropagator
 }
 
 const (
-	instrumentName                            = "github.com/smallnest/rpcx/server"
 	tracingCommonKeyIpIntranet                = `ip.intranet`
 	tracingCommonKeyIpHostname                = `hostname`
 	tracingEventRpcxPreHandleRequest          = "rpcx.pre.handle.request"
@@ -44,17 +46,22 @@ const (
 	tracingEventRpcxPostWriteResponse         = "rpcx.post.write.response"
 	tracingEventRpcxPostWriteResponseMetadata = "rpcx.post.write.response.metadata"
 	tracingEventRpcxPostWriteResponsePayload  = "rpcx.post.write.response.payload"
+	metricRequestPath                         = "rpcx.client.request.path"
 )
 
-func NewOpenTelemetryPlugin(tracer trace.Tracer, propagators propagation.TextMapPropagator) *OpenTelemetryPlugin {
+func NewOpenTelemetryPlugin(tracer trace.Tracer, propagators propagation.TextMapPropagator, meter metric.Meter) *OpenTelemetryPlugin {
 	if propagators == nil {
 		propagators = otel.GetTextMapPropagator()
 	}
 
-	return &OpenTelemetryPlugin{
+	ret := &OpenTelemetryPlugin{
 		tracer:      tracer,
 		propagators: propagators,
 	}
+	if meter != nil {
+		ret.recorder = GetRecorder(meter, "")
+	}
+	return ret
 }
 
 func (p OpenTelemetryPlugin) Register(name string, rcvr interface{}, metadata string) error {
@@ -94,16 +101,13 @@ func (p OpenTelemetryPlugin) HandleConnAccept(conn net.Conn) (net.Conn, bool) {
 }
 
 func (p OpenTelemetryPlugin) PreHandleRequest(ctx context.Context, r *protocol.Message) error {
-	var (
-		span trace.Span
-	)
+	var span trace.Span
 	shareContext := ctx.(*rc.Context).Context
 
-	shareContext, span = otel.GetTracerProvider().Tracer(
-		instrumentName,
-	).Start(
+	spanName := fmt.Sprintf("rpcx.service.%s.%s", r.ServicePath, r.ServiceMethod)
+	shareContext, span = p.tracer.Start(
 		shareContext,
-		"rpcx.service."+r.ServicePath+"."+r.ServiceMethod,
+		spanName,
 		trace.WithSpanKind(trace.SpanKindServer),
 	)
 	hostname, _ := os.Hostname()
@@ -116,11 +120,15 @@ func (p OpenTelemetryPlugin) PreHandleRequest(ctx context.Context, r *protocol.M
 	shareContext = context.WithValue(shareContext, "RpcXServerTracingHandled", 1)
 
 	span.AddEvent(tracingEventRpcxPreHandleRequest, trace.WithAttributes(
-		attribute.String(tracingEventRpcxPreHandleRequestPath, "rpcx.service."+r.ServicePath+"."+r.ServiceMethod),
+		attribute.String(tracingEventRpcxPreHandleRequestPath, spanName),
 		attribute.String(tracingEventRpcxPreHandleRequestMetadata, fmt.Sprintf("%+v", r.Metadata)),
 		attribute.String(tracingEventRpcxPreHandleRequestPayload, string(r.Payload)),
 	))
 	ctx.(*rc.Context).SetValue(share.OpenTelemetryKey, span)
+	if p.recorder != nil {
+		p.recorder.activeRequestsCounter.Add(shareContext, 1, metric.WithAttributes(attribute.String(metricRequestPath, spanName)))
+		ctx.(*rc.Context).SetValue(share.OpenTelemetryStartTimeKey, time.Now().UnixMilli())
+	}
 	ctx.(*rc.Context).Context = shareContext
 
 	return nil
@@ -138,6 +146,18 @@ func (p OpenTelemetryPlugin) PostWriteResponse(ctx context.Context, req *protoco
 		span.SetStatus(codes.Error, err.Error())
 	} else {
 		span.SetStatus(codes.Ok, "success")
+	}
+
+	spanName := fmt.Sprintf("rpcx.service.%s.%s", req.ServicePath, req.ServiceMethod)
+
+	attrs := metric.WithAttributes(attribute.String(metricRequestPath, spanName))
+	if p.recorder != nil {
+		p.recorder.activeRequestsCounter.Add(ctx, -1, attrs)
+		p.recorder.attemptsCounter.Add(ctx, 1, attrs)
+		startTime := ctx.Value(share.OpenTelemetryStartTimeKey).(int64)
+		p.recorder.totalDuration.Record(ctx, time.Now().UnixMilli()-startTime, attrs)
+		p.recorder.requestSize.Record(ctx, int64(len(req.Payload)), attrs)
+		p.recorder.responseSize.Record(ctx, int64(len(res.Payload)), attrs)
 	}
 
 	return nil
