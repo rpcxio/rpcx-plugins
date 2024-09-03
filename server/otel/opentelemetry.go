@@ -20,7 +20,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.18.0"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/bububa/rpcx-plugins/share"
+	"github.com/rpcxio/rpcx-plugins/share"
 )
 
 var (
@@ -49,7 +49,7 @@ const (
 	metricRequestPath                         = "rpcx.client.request.path"
 )
 
-func NewOpenTelemetryPlugin(tracer trace.Tracer, propagators propagation.TextMapPropagator, meter metric.Meter) *OpenTelemetryPlugin {
+func NewOpenTelemetryPlugin(tracer trace.Tracer, propagators propagation.TextMapPropagator) *OpenTelemetryPlugin {
 	if propagators == nil {
 		propagators = otel.GetTextMapPropagator()
 	}
@@ -58,10 +58,12 @@ func NewOpenTelemetryPlugin(tracer trace.Tracer, propagators propagation.TextMap
 		tracer:      tracer,
 		propagators: propagators,
 	}
-	if meter != nil {
-		ret.recorder = GetRecorder(meter, "")
-	}
 	return ret
+}
+
+func (p *OpenTelemetryPlugin) WithMetter(meter metric.Meter) *OpenTelemetryPlugin {
+	p.recorder = GetRecorder(meter, "")
+	return p
 }
 
 func (p OpenTelemetryPlugin) Register(name string, rcvr interface{}, metadata string) error {

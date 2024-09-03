@@ -13,7 +13,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/bububa/rpcx-plugins/share"
+	"github.com/rpcxio/rpcx-plugins/share"
 )
 
 const (
@@ -26,7 +26,7 @@ type OpenTelemetryPlugin struct {
 	propagators propagation.TextMapPropagator
 }
 
-func NewOpenTelemetryPlugin(tracer trace.Tracer, propagators propagation.TextMapPropagator, meter metric.Meter) *OpenTelemetryPlugin {
+func NewOpenTelemetryPlugin(tracer trace.Tracer, propagators propagation.TextMapPropagator) *OpenTelemetryPlugin {
 	if propagators == nil {
 		propagators = otel.GetTextMapPropagator()
 	}
@@ -35,10 +35,12 @@ func NewOpenTelemetryPlugin(tracer trace.Tracer, propagators propagation.TextMap
 		tracer:      tracer,
 		propagators: propagators,
 	}
-	if meter != nil {
-		ret.recorder = GetRecorder(meter, "")
-	}
 	return ret
+}
+
+func (p *OpenTelemetryPlugin) WithMetter(meter metric.Meter) *OpenTelemetryPlugin {
+	p.recorder = GetRecorder(meter, "")
+	return p
 }
 
 func (p *OpenTelemetryPlugin) PreCall(ctx context.Context, servicePath, serviceMethod string, args interface{}) error {
