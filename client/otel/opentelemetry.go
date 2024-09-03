@@ -13,7 +13,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/rpcxio/rpcx-plugins/share"
+	"github.com/bububa/rpcx-plugins/share"
 )
 
 const (

@@ -20,7 +20,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.18.0"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/rpcxio/rpcx-plugins/share"
+	"github.com/bububa/rpcx-plugins/share"
 )
 
 var (

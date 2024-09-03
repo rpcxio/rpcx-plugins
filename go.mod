@@ -1,6 +1,8 @@
-module github.com/rpcxio/rpcx-plugins
+module github.com/bububa/rpcx-plugins
 
-go 1.21
+go 1.22
+
+toolchain go1.23.0
 
 require (
 	github.com/influxdata/influxdb1-client v0.0.0-20220302092344-a9ab5670611c
