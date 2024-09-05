@@ -4,9 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/smallnest/rpcx/protocol"
@@ -17,7 +14,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
-	semconv "go.opentelemetry.io/otel/semconv/v1.18.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/rpcxio/rpcx-plugins/share"
@@ -37,8 +34,6 @@ type OpenTelemetryPlugin struct {
 }
 
 const (
-	tracingCommonKeyIpIntranet                = `ip.intranet`
-	tracingCommonKeyIpHostname                = `hostname`
 	tracingEventRpcxPreHandleRequest          = "rpcx.pre.handle.request"
 	tracingEventRpcxPreHandleRequestPath      = "rpcx.pre.handle.request.path"
 	tracingEventRpcxPreHandleRequestMetadata  = "rpcx.pre.handle.request.metadata"
@@ -46,7 +41,6 @@ const (
 	tracingEventRpcxPostWriteResponse         = "rpcx.post.write.response"
 	tracingEventRpcxPostWriteResponseMetadata = "rpcx.post.write.response.metadata"
 	tracingEventRpcxPostWriteResponsePayload  = "rpcx.post.write.response.payload"
-	metricRequestPath                         = "rpcx.client.request.path"
 )
 
 func NewOpenTelemetryPlugin(tracer trace.Tracer, propagators propagation.TextMapPropagator) *OpenTelemetryPlugin {
@@ -62,7 +56,7 @@ func NewOpenTelemetryPlugin(tracer trace.Tracer, propagators propagation.TextMap
 }
 
 func (p *OpenTelemetryPlugin) WithMeter(meter metric.Meter) *OpenTelemetryPlugin {
-	p.recorder = GetRecorder(meter, "")
+	p.recorder = GetRecorder(meter)
 	return p
 }
 
@@ -103,24 +97,16 @@ func (p OpenTelemetryPlugin) HandleConnAccept(conn net.Conn) (net.Conn, bool) {
 }
 
 func (p OpenTelemetryPlugin) PreHandleRequest(ctx context.Context, r *protocol.Message) error {
-	var span trace.Span
-	shareContext := ctx.(*rc.Context).Context
+	spanCtx := share.Extract(ctx, p.propagators)
+	ctx0 := trace.ContextWithRemoteSpanContext(ctx, spanCtx)
 
 	spanName := fmt.Sprintf("rpcx.service.%s.%s", r.ServicePath, r.ServiceMethod)
-	shareContext, span = p.tracer.Start(
-		shareContext,
+	ctx1, span := p.tracer.Start(
+		ctx0,
 		spanName,
 		trace.WithSpanKind(trace.SpanKindServer),
 	)
-	hostname, _ := os.Hostname()
-	intranetIps, _ := GetIntranetIpArray()
-	intranetIpStr := strings.Join(intranetIps, ",")
-	span.SetAttributes(
-		attribute.String(tracingCommonKeyIpHostname, hostname),
-		attribute.String(tracingCommonKeyIpIntranet, intranetIpStr),
-		semconv.HostName(hostname))
-	shareContext = context.WithValue(shareContext, "RpcXServerTracingHandled", 1)
-
+	share.Inject(ctx1, p.propagators)
 	span.AddEvent(tracingEventRpcxPreHandleRequest, trace.WithAttributes(
 		attribute.String(tracingEventRpcxPreHandleRequestPath, spanName),
 		attribute.String(tracingEventRpcxPreHandleRequestMetadata, fmt.Sprintf("%+v", r.Metadata)),
@@ -128,10 +114,12 @@ func (p OpenTelemetryPlugin) PreHandleRequest(ctx context.Context, r *protocol.M
 	))
 	ctx.(*rc.Context).SetValue(share.OpenTelemetryKey, span)
 	if p.recorder != nil {
-		p.recorder.activeRequestsCounter.Add(shareContext, 1, metric.WithAttributes(attribute.String(metricRequestPath, spanName)))
+		attrs := metric.WithAttributes(semconv.RPCService(r.ServicePath), semconv.RPCMethod(r.ServiceMethod))
+		p.recorder.requestsCounter.Add(ctx1, 1, attrs)
+		p.recorder.requestSize.Record(ctx1, int64(len(r.Payload)), attrs)
 		ctx.(*rc.Context).SetValue(share.OpenTelemetryStartTimeKey, time.Now().UnixMilli())
 	}
-	ctx.(*rc.Context).Context = shareContext
+	ctx.(*rc.Context).Context = ctx1
 
 	return nil
 }
@@ -144,110 +132,22 @@ func (p OpenTelemetryPlugin) PostWriteResponse(ctx context.Context, req *protoco
 		attribute.String(tracingEventRpcxPostWriteResponseMetadata, fmt.Sprintf("%+v", res.Metadata)),
 		attribute.String(tracingEventRpcxPostWriteResponsePayload, string(res.Payload)),
 	))
+
+	attrs := []attribute.KeyValue{semconv.RPCService(req.ServicePath), semconv.RPCMethod(req.ServiceMethod)}
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
+		attrs = append(attrs, semconv.OTelStatusCodeError)
 	} else {
 		span.SetStatus(codes.Ok, "success")
+		attrs = append(attrs, semconv.OTelStatusCodeOk)
 	}
 
-	spanName := fmt.Sprintf("rpcx.service.%s.%s", req.ServicePath, req.ServiceMethod)
-
-	attrs := metric.WithAttributes(attribute.String(metricRequestPath, spanName))
 	if p.recorder != nil {
-		p.recorder.activeRequestsCounter.Add(ctx, -1, attrs)
-		p.recorder.attemptsCounter.Add(ctx, 1, attrs)
+		p.recorder.responsesCounter.Add(ctx, 1, metric.WithAttributes(attrs...))
 		startTime := ctx.Value(share.OpenTelemetryStartTimeKey).(int64)
-		p.recorder.totalDuration.Record(ctx, time.Now().UnixMilli()-startTime, attrs)
-		p.recorder.requestSize.Record(ctx, int64(len(req.Payload)), attrs)
-		p.recorder.responseSize.Record(ctx, int64(len(res.Payload)), attrs)
+		p.recorder.totalDuration.Record(ctx, time.Now().UnixMilli()-startTime, metric.WithAttributes(attrs...))
+		p.recorder.responseSize.Record(ctx, int64(len(res.Payload)), metric.WithAttributes(attrs...))
 	}
 
 	return nil
-}
-
-func GetIntranetIpArray() (ips []string, err error) {
-	var (
-		addresses  []net.Addr
-		interFaces []net.Interface
-	)
-	interFaces, err = net.Interfaces()
-	if err != nil {
-		return ips, err
-	}
-	for _, interFace := range interFaces {
-		if interFace.Flags&net.FlagUp == 0 {
-			// interface down
-			continue
-		}
-		if interFace.Flags&net.FlagLoopback != 0 {
-			// loop back interface
-			continue
-		}
-		// ignore warden bridge
-		if strings.HasPrefix(interFace.Name, "w-") {
-			continue
-		}
-		addresses, err = interFace.Addrs()
-		if err != nil {
-			return ips, err
-		}
-		for _, addr := range addresses {
-			var ip net.IP
-			switch v := addr.(type) {
-			case *net.IPNet:
-				ip = v.IP
-			case *net.IPAddr:
-				ip = v.IP
-			}
-
-			if ip == nil || ip.IsLoopback() {
-				continue
-			}
-			ip = ip.To4()
-			if ip == nil {
-				// not an ipv4 address
-				continue
-			}
-			ipStr := ip.String()
-			if IsIntranet(ipStr) {
-				ips = append(ips, ipStr)
-			}
-		}
-	}
-	return ips, nil
-}
-
-// IsIntranet checks and returns whether given ip an intranet ip.
-//
-// Local: 127.0.0.1
-// A: 10.0.0.0--10.255.255.255
-// B: 172.16.0.0--172.31.255.255
-// C: 192.168.0.0--192.168.255.255
-func IsIntranet(ip string) bool {
-	if ip == "127.0.0.1" {
-		return true
-	}
-	array := strings.Split(ip, ".")
-	if len(array) != 4 {
-		return false
-	}
-	// A
-	if array[0] == "10" || (array[0] == "192" && array[1] == "168") {
-		return true
-	}
-	// C
-	if array[0] == "192" && array[1] == "168" {
-		return true
-	}
-	// B
-	if array[0] == "172" {
-		second, err := strconv.ParseInt(array[1], 10, 64)
-		if err != nil {
-			return false
-		}
-		if second >= 16 && second <= 31 {
-			return true
-		}
-	}
-	return false
 }

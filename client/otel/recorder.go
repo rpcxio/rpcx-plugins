@@ -2,30 +2,25 @@ package client
 
 import (
 	"go.opentelemetry.io/otel/metric"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
 // Recorder knows how to record and measure the metrics. This
 // has the required methods to be used with the HTTP
 // middlewares.
 type Recorder struct {
-	attemptsCounter       metric.Int64UpDownCounter
-	totalDuration         metric.Int64Histogram
-	activeRequestsCounter metric.Int64UpDownCounter
+	requestsCounter  metric.Int64UpDownCounter
+	responsesCounter metric.Int64UpDownCounter
+	totalDuration    metric.Int64Histogram
 }
 
-func GetRecorder(meter metric.Meter, metricsPrefix string) *Recorder {
-	metricName := func(metricName string) string {
-		if len(metricsPrefix) > 0 {
-			return metricsPrefix + "." + metricName
-		}
-		return metricName
-	}
-	attemptsCounter, _ := meter.Int64UpDownCounter(metricName("rpcx.client.request_count"), metric.WithDescription("Number of RPCX Client Requests"), metric.WithUnit("Count"))
-	totalDuration, _ := meter.Int64Histogram(metricName("rpcx.client.duration"), metric.WithDescription("Time Taken by RPCX client request"), metric.WithUnit("Milliseconds"))
-	activeRequestsCounter, _ := meter.Int64UpDownCounter(metricName("rpcx.client.active_requests"), metric.WithDescription("Number of RPCX client requests inflight"), metric.WithUnit("Count"))
+func GetRecorder(meter metric.Meter) *Recorder {
+	requestsCounter, _ := meter.Int64UpDownCounter(semconv.RPCClientRequestsPerRPCName, metric.WithDescription(semconv.RPCClientRequestsPerRPCDescription), metric.WithUnit(semconv.RPCClientRequestsPerRPCUnit))
+	responsesCounter, _ := meter.Int64UpDownCounter(semconv.RPCClientResponsesPerRPCName, metric.WithDescription(semconv.RPCClientResponsesPerRPCDescription), metric.WithUnit(semconv.RPCClientResponsesPerRPCUnit))
+	totalDuration, _ := meter.Int64Histogram(semconv.RPCClientDurationName, metric.WithDescription(semconv.RPCClientDurationDescription), metric.WithUnit(semconv.RPCClientDurationUnit))
 	return &Recorder{
-		attemptsCounter:       attemptsCounter,
-		totalDuration:         totalDuration,
-		activeRequestsCounter: activeRequestsCounter,
+		requestsCounter:  requestsCounter,
+		responsesCounter: responsesCounter,
+		totalDuration:    totalDuration,
 	}
 }

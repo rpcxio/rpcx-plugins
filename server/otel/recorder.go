@@ -2,36 +2,31 @@ package otel
 
 import (
 	"go.opentelemetry.io/otel/metric"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
 // Recorder knows how to record and measure the metrics. This
 // has the required methods to be used with the HTTP
 // middlewares.
 type Recorder struct {
-	attemptsCounter       metric.Int64UpDownCounter
-	totalDuration         metric.Int64Histogram
-	activeRequestsCounter metric.Int64UpDownCounter
-	requestSize           metric.Int64Histogram
-	responseSize          metric.Int64Histogram
+	requestsCounter  metric.Int64UpDownCounter
+	responsesCounter metric.Int64UpDownCounter
+	totalDuration    metric.Int64Histogram
+	requestSize      metric.Int64Histogram
+	responseSize     metric.Int64Histogram
 }
 
-func GetRecorder(meter metric.Meter, metricsPrefix string) *Recorder {
-	metricName := func(metricName string) string {
-		if len(metricsPrefix) > 0 {
-			return metricsPrefix + "." + metricName
-		}
-		return metricName
-	}
-	attemptsCounter, _ := meter.Int64UpDownCounter(metricName("rpcx.server.request_count"), metric.WithDescription("Number of RPCX Server Requests"), metric.WithUnit("Count"))
-	totalDuration, _ := meter.Int64Histogram(metricName("rpcx.server.duration"), metric.WithDescription("Time Taken by RPCX server request"), metric.WithUnit("Milliseconds"))
-	activeRequestsCounter, _ := meter.Int64UpDownCounter(metricName("rpcx.server.active_requests"), metric.WithDescription("Number of RPCX server requests inflight"), metric.WithUnit("Count"))
-	requestSize, _ := meter.Int64Histogram(metricName("rpcx.server.request_content_length"), metric.WithDescription("RPCX server Request Size"), metric.WithUnit("Bytes"))
-	responseSize, _ := meter.Int64Histogram(metricName("rpcx.server.response_content_length"), metric.WithDescription("RPCX server Response Size"), metric.WithUnit("Bytes"))
+func GetRecorder(meter metric.Meter) *Recorder {
+	requestsCounter, _ := meter.Int64UpDownCounter(semconv.RPCServerRequestsPerRPCName, metric.WithDescription(semconv.RPCServerRequestsPerRPCDescription), metric.WithUnit(semconv.RPCServerRequestsPerRPCUnit))
+	responsesCounter, _ := meter.Int64UpDownCounter(semconv.RPCServerResponsesPerRPCName, metric.WithDescription(semconv.RPCServerResponsesPerRPCDescription), metric.WithUnit(semconv.RPCServerResponsesPerRPCUnit))
+	totalDuration, _ := meter.Int64Histogram(semconv.RPCServerDurationName, metric.WithDescription(semconv.RPCServerDurationDescription), metric.WithUnit(semconv.RPCServerDurationUnit))
+	requestSize, _ := meter.Int64Histogram(semconv.RPCServerRequestSizeName, metric.WithDescription(semconv.RPCServerRequestSizeDescription), metric.WithUnit(semconv.RPCServerRequestSizeUnit))
+	responseSize, _ := meter.Int64Histogram(semconv.RPCServerResponseSizeName, metric.WithDescription(semconv.RPCServerResponseSizeDescription), metric.WithUnit(semconv.RPCServerResponseSizeUnit))
 	return &Recorder{
-		attemptsCounter:       attemptsCounter,
-		totalDuration:         totalDuration,
-		activeRequestsCounter: activeRequestsCounter,
-		requestSize:           requestSize,
-		responseSize:          responseSize,
+		requestsCounter:  requestsCounter,
+		responsesCounter: responsesCounter,
+		totalDuration:    totalDuration,
+		requestSize:      requestSize,
+		responseSize:     responseSize,
 	}
 }
