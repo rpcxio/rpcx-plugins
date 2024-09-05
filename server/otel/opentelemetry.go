@@ -4,9 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/smallnest/rpcx/protocol"
@@ -110,13 +107,6 @@ func (p OpenTelemetryPlugin) PreHandleRequest(ctx context.Context, r *protocol.M
 		trace.WithSpanKind(trace.SpanKindServer),
 	)
 	share.Inject(ctx1, p.propagators)
-	hostname, _ := os.Hostname()
-	intranetIps, _ := GetIntranetIpArray()
-	intranetIpStr := strings.Join(intranetIps, ",")
-	span.SetAttributes(
-		semconv.ServerAddress(intranetIpStr),
-		semconv.HostName(hostname))
-
 	span.AddEvent(tracingEventRpcxPreHandleRequest, trace.WithAttributes(
 		attribute.String(tracingEventRpcxPreHandleRequestPath, spanName),
 		attribute.String(tracingEventRpcxPreHandleRequestMetadata, fmt.Sprintf("%+v", r.Metadata)),
@@ -126,9 +116,10 @@ func (p OpenTelemetryPlugin) PreHandleRequest(ctx context.Context, r *protocol.M
 	if p.recorder != nil {
 		attrs := metric.WithAttributes(semconv.RPCService(r.ServicePath), semconv.RPCMethod(r.ServiceMethod))
 		p.recorder.requestsCounter.Add(ctx1, 1, attrs)
-		p.recorder.requestSize.Record(ctx, int64(len(r.Payload)), attrs)
+		p.recorder.requestSize.Record(ctx1, int64(len(r.Payload)), attrs)
 		ctx.(*rc.Context).SetValue(share.OpenTelemetryStartTimeKey, time.Now().UnixMilli())
 	}
+	ctx.(*rc.Context).Context = ctx1
 
 	return nil
 }
@@ -159,91 +150,4 @@ func (p OpenTelemetryPlugin) PostWriteResponse(ctx context.Context, req *protoco
 	}
 
 	return nil
-}
-
-func GetIntranetIpArray() (ips []string, err error) {
-	var (
-		addresses  []net.Addr
-		interFaces []net.Interface
-	)
-	interFaces, err = net.Interfaces()
-	if err != nil {
-		return ips, err
-	}
-	for _, interFace := range interFaces {
-		if interFace.Flags&net.FlagUp == 0 {
-			// interface down
-			continue
-		}
-		if interFace.Flags&net.FlagLoopback != 0 {
-			// loop back interface
-			continue
-		}
-		// ignore warden bridge
-		if strings.HasPrefix(interFace.Name, "w-") {
-			continue
-		}
-		addresses, err = interFace.Addrs()
-		if err != nil {
-			return ips, err
-		}
-		for _, addr := range addresses {
-			var ip net.IP
-			switch v := addr.(type) {
-			case *net.IPNet:
-				ip = v.IP
-			case *net.IPAddr:
-				ip = v.IP
-			}
-
-			if ip == nil || ip.IsLoopback() {
-				continue
-			}
-			ip = ip.To4()
-			if ip == nil {
-				// not an ipv4 address
-				continue
-			}
-			ipStr := ip.String()
-			if IsIntranet(ipStr) {
-				ips = append(ips, ipStr)
-			}
-		}
-	}
-	return ips, nil
-}
-
-// IsIntranet checks and returns whether given ip an intranet ip.
-//
-// Local: 127.0.0.1
-// A: 10.0.0.0--10.255.255.255
-// B: 172.16.0.0--172.31.255.255
-// C: 192.168.0.0--192.168.255.255
-func IsIntranet(ip string) bool {
-	if ip == "127.0.0.1" {
-		return true
-	}
-	array := strings.Split(ip, ".")
-	if len(array) != 4 {
-		return false
-	}
-	// A
-	if array[0] == "10" || (array[0] == "192" && array[1] == "168") {
-		return true
-	}
-	// C
-	if array[0] == "192" && array[1] == "168" {
-		return true
-	}
-	// B
-	if array[0] == "172" {
-		second, err := strconv.ParseInt(array[1], 10, 64)
-		if err != nil {
-			return false
-		}
-		if second >= 16 && second <= 31 {
-			return true
-		}
-	}
-	return false
 }
