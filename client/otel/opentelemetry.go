@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/rpcxio/rpcx-plugins/share"
@@ -39,7 +40,7 @@ func NewOpenTelemetryPlugin(tracer trace.Tracer, propagators propagation.TextMap
 }
 
 func (p *OpenTelemetryPlugin) WithMeter(meter metric.Meter) *OpenTelemetryPlugin {
-	p.recorder = GetRecorder(meter, "")
+	p.recorder = GetRecorder(meter)
 	return p
 }
 
@@ -50,12 +51,13 @@ func (p *OpenTelemetryPlugin) PreCall(ctx context.Context, servicePath, serviceM
 	spanName := fmt.Sprintf("rpcx.client.%s.%s", servicePath, serviceMethod)
 	ctx1, span := p.tracer.Start(ctx0, spanName)
 	share.Inject(ctx1, p.propagators)
-	span.AddEvent("Call", trace.WithAttributes(
-		attribute.String("rpcx.req", fmt.Sprintf("%+v", args)),
+	span.AddEvent("PreCall", trace.WithAttributes(
+		attribute.String("rpc.client.request.message", fmt.Sprintf("%+v", args)),
 	))
 	ctx.(*rc.Context).SetValue(share.OpenTelemetryKey, span)
 	if p.recorder != nil {
-		p.recorder.activeRequestsCounter.Add(ctx1, 1, metric.WithAttributes(attribute.String(metricRequestPath, spanName)))
+		attrs := []attribute.KeyValue{semconv.RPCService(servicePath), semconv.RPCMethod(serviceMethod)}
+		p.recorder.requestsCounter.Add(ctx1, 1, metric.WithAttributes(attrs...))
 		ctx.(*rc.Context).SetValue(share.OpenTelemetryStartTimeKey, time.Now().UnixMilli())
 	}
 
@@ -63,24 +65,24 @@ func (p *OpenTelemetryPlugin) PreCall(ctx context.Context, servicePath, serviceM
 }
 
 func (p *OpenTelemetryPlugin) PostCall(ctx context.Context, servicePath, serviceMethod string, args interface{}, reply interface{}, err error) error {
-	spanName := fmt.Sprintf("rpcx.client.%s.%s", servicePath, serviceMethod)
-	attrs := metric.WithAttributes(attribute.String(metricRequestPath, spanName))
-	if p.recorder != nil {
-		p.recorder.activeRequestsCounter.Add(ctx, -1, attrs)
-		p.recorder.attemptsCounter.Add(ctx, 1, attrs)
-		startTime := ctx.Value(share.OpenTelemetryStartTimeKey).(int64)
-		p.recorder.totalDuration.Record(ctx, time.Now().UnixMilli()-startTime, attrs)
-	}
 	span := ctx.Value(share.OpenTelemetryKey).(trace.Span)
 	defer span.End()
 
-	span.SetAttributes(
-		attribute.String("rpcx.resp", fmt.Sprintf("%+v", reply)),
-	)
+	span.AddEvent("PostCall", trace.WithAttributes(
+		attribute.String("rpc.client.response.message", fmt.Sprintf("%+v", reply)),
+	))
+	attrs := []attribute.KeyValue{semconv.RPCService(servicePath), semconv.RPCMethod(serviceMethod)}
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
+		attrs = append(attrs, semconv.OTelStatusCodeError)
 	} else {
 		span.SetStatus(codes.Ok, "success")
+		attrs = append(attrs, semconv.OTelStatusCodeError)
+	}
+	if p.recorder != nil {
+		p.recorder.responsesCounter.Add(ctx, 1, metric.WithAttributes(attrs...))
+		startTime := ctx.Value(share.OpenTelemetryStartTimeKey).(int64)
+		p.recorder.totalDuration.Record(ctx, time.Now().UnixMilli()-startTime, metric.WithAttributes(attrs...))
 	}
 	return nil
 }

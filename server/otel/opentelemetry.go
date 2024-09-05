@@ -17,7 +17,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
-	semconv "go.opentelemetry.io/otel/semconv/v1.18.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/rpcxio/rpcx-plugins/share"
@@ -37,8 +37,6 @@ type OpenTelemetryPlugin struct {
 }
 
 const (
-	tracingCommonKeyIpIntranet                = `ip.intranet`
-	tracingCommonKeyIpHostname                = `hostname`
 	tracingEventRpcxPreHandleRequest          = "rpcx.pre.handle.request"
 	tracingEventRpcxPreHandleRequestPath      = "rpcx.pre.handle.request.path"
 	tracingEventRpcxPreHandleRequestMetadata  = "rpcx.pre.handle.request.metadata"
@@ -46,7 +44,6 @@ const (
 	tracingEventRpcxPostWriteResponse         = "rpcx.post.write.response"
 	tracingEventRpcxPostWriteResponseMetadata = "rpcx.post.write.response.metadata"
 	tracingEventRpcxPostWriteResponsePayload  = "rpcx.post.write.response.payload"
-	metricRequestPath                         = "rpcx.client.request.path"
 )
 
 func NewOpenTelemetryPlugin(tracer trace.Tracer, propagators propagation.TextMapPropagator) *OpenTelemetryPlugin {
@@ -62,7 +59,7 @@ func NewOpenTelemetryPlugin(tracer trace.Tracer, propagators propagation.TextMap
 }
 
 func (p *OpenTelemetryPlugin) WithMeter(meter metric.Meter) *OpenTelemetryPlugin {
-	p.recorder = GetRecorder(meter, "")
+	p.recorder = GetRecorder(meter)
 	return p
 }
 
@@ -103,23 +100,22 @@ func (p OpenTelemetryPlugin) HandleConnAccept(conn net.Conn) (net.Conn, bool) {
 }
 
 func (p OpenTelemetryPlugin) PreHandleRequest(ctx context.Context, r *protocol.Message) error {
-	var span trace.Span
-	shareContext := ctx.(*rc.Context).Context
+	spanCtx := share.Extract(ctx, p.propagators)
+	ctx0 := trace.ContextWithRemoteSpanContext(ctx, spanCtx)
 
 	spanName := fmt.Sprintf("rpcx.service.%s.%s", r.ServicePath, r.ServiceMethod)
-	shareContext, span = p.tracer.Start(
-		shareContext,
+	ctx1, span := p.tracer.Start(
+		ctx0,
 		spanName,
 		trace.WithSpanKind(trace.SpanKindServer),
 	)
+	share.Inject(ctx1, p.propagators)
 	hostname, _ := os.Hostname()
 	intranetIps, _ := GetIntranetIpArray()
 	intranetIpStr := strings.Join(intranetIps, ",")
 	span.SetAttributes(
-		attribute.String(tracingCommonKeyIpHostname, hostname),
-		attribute.String(tracingCommonKeyIpIntranet, intranetIpStr),
+		semconv.ServerAddress(intranetIpStr),
 		semconv.HostName(hostname))
-	shareContext = context.WithValue(shareContext, "RpcXServerTracingHandled", 1)
 
 	span.AddEvent(tracingEventRpcxPreHandleRequest, trace.WithAttributes(
 		attribute.String(tracingEventRpcxPreHandleRequestPath, spanName),
@@ -128,10 +124,11 @@ func (p OpenTelemetryPlugin) PreHandleRequest(ctx context.Context, r *protocol.M
 	))
 	ctx.(*rc.Context).SetValue(share.OpenTelemetryKey, span)
 	if p.recorder != nil {
-		p.recorder.activeRequestsCounter.Add(shareContext, 1, metric.WithAttributes(attribute.String(metricRequestPath, spanName)))
+		attrs := metric.WithAttributes(semconv.RPCService(r.ServicePath), semconv.RPCMethod(r.ServiceMethod))
+		p.recorder.requestsCounter.Add(ctx1, 1, attrs)
+		p.recorder.requestSize.Record(ctx, int64(len(r.Payload)), attrs)
 		ctx.(*rc.Context).SetValue(share.OpenTelemetryStartTimeKey, time.Now().UnixMilli())
 	}
-	ctx.(*rc.Context).Context = shareContext
 
 	return nil
 }
@@ -144,22 +141,21 @@ func (p OpenTelemetryPlugin) PostWriteResponse(ctx context.Context, req *protoco
 		attribute.String(tracingEventRpcxPostWriteResponseMetadata, fmt.Sprintf("%+v", res.Metadata)),
 		attribute.String(tracingEventRpcxPostWriteResponsePayload, string(res.Payload)),
 	))
+
+	attrs := []attribute.KeyValue{semconv.RPCService(req.ServicePath), semconv.RPCMethod(req.ServiceMethod)}
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
+		attrs = append(attrs, semconv.OTelStatusCodeError)
 	} else {
 		span.SetStatus(codes.Ok, "success")
+		attrs = append(attrs, semconv.OTelStatusCodeOk)
 	}
 
-	spanName := fmt.Sprintf("rpcx.service.%s.%s", req.ServicePath, req.ServiceMethod)
-
-	attrs := metric.WithAttributes(attribute.String(metricRequestPath, spanName))
 	if p.recorder != nil {
-		p.recorder.activeRequestsCounter.Add(ctx, -1, attrs)
-		p.recorder.attemptsCounter.Add(ctx, 1, attrs)
+		p.recorder.responsesCounter.Add(ctx, 1, metric.WithAttributes(attrs...))
 		startTime := ctx.Value(share.OpenTelemetryStartTimeKey).(int64)
-		p.recorder.totalDuration.Record(ctx, time.Now().UnixMilli()-startTime, attrs)
-		p.recorder.requestSize.Record(ctx, int64(len(req.Payload)), attrs)
-		p.recorder.responseSize.Record(ctx, int64(len(res.Payload)), attrs)
+		p.recorder.totalDuration.Record(ctx, time.Now().UnixMilli()-startTime, metric.WithAttributes(attrs...))
+		p.recorder.responseSize.Record(ctx, int64(len(res.Payload)), metric.WithAttributes(attrs...))
 	}
 
 	return nil
