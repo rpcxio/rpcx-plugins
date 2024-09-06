@@ -98,7 +98,7 @@ func (p OpenTelemetryPlugin) HandleConnAccept(conn net.Conn) (net.Conn, bool) {
 
 func (p OpenTelemetryPlugin) PreHandleRequest(ctx context.Context, r *protocol.Message) error {
 	spanCtx := share.Extract(ctx, p.propagators)
-	ctx0 := trace.ContextWithRemoteSpanContext(ctx, spanCtx)
+	ctx0 := trace.ContextWithRemoteSpanContext(ctx.(*rc.Context).Context, spanCtx)
 
 	spanName := fmt.Sprintf("rpcx.service.%s.%s", r.ServicePath, r.ServiceMethod)
 	ctx1, span := p.tracer.Start(
@@ -106,26 +106,26 @@ func (p OpenTelemetryPlugin) PreHandleRequest(ctx context.Context, r *protocol.M
 		spanName,
 		trace.WithSpanKind(trace.SpanKindServer),
 	)
-	share.Inject(ctx1, p.propagators)
 	span.AddEvent(tracingEventRpcxPreHandleRequest, trace.WithAttributes(
 		attribute.String(tracingEventRpcxPreHandleRequestPath, spanName),
 		attribute.String(tracingEventRpcxPreHandleRequestMetadata, fmt.Sprintf("%+v", r.Metadata)),
 		attribute.String(tracingEventRpcxPreHandleRequestPayload, string(r.Payload)),
 	))
-	ctx.(*rc.Context).SetValue(share.OpenTelemetryKey, span)
 	if p.recorder != nil {
 		attrs := metric.WithAttributes(semconv.RPCService(r.ServicePath), semconv.RPCMethod(r.ServiceMethod))
 		p.recorder.requestsCounter.Add(ctx1, 1, attrs)
 		p.recorder.requestSize.Record(ctx1, int64(len(r.Payload)), attrs)
-		ctx.(*rc.Context).SetValue(share.OpenTelemetryStartTimeKey, time.Now().UnixMilli())
+		ctx.(*rc.Context).SetValue(share.OpenTelemetryStartTimeKey, time.Now())
 	}
+
 	ctx.(*rc.Context).Context = ctx1
+	share.Inject(ctx, p.propagators)
 
 	return nil
 }
 
 func (p OpenTelemetryPlugin) PostWriteResponse(ctx context.Context, req *protocol.Message, res *protocol.Message, err error) error {
-	span := ctx.Value(share.OpenTelemetryKey).(trace.Span)
+	span := trace.SpanFromContext(ctx)
 	defer span.End()
 
 	span.AddEvent(tracingEventRpcxPostWriteResponse, trace.WithAttributes(
@@ -144,8 +144,8 @@ func (p OpenTelemetryPlugin) PostWriteResponse(ctx context.Context, req *protoco
 
 	if p.recorder != nil {
 		p.recorder.responsesCounter.Add(ctx, 1, metric.WithAttributes(attrs...))
-		startTime := ctx.Value(share.OpenTelemetryStartTimeKey).(int64)
-		p.recorder.totalDuration.Record(ctx, time.Now().UnixMilli()-startTime, metric.WithAttributes(attrs...))
+		startTime := ctx.Value(share.OpenTelemetryStartTimeKey).(time.Time)
+		p.recorder.totalDuration.Record(ctx, int64(time.Since(startTime)/time.Millisecond), metric.WithAttributes(attrs...))
 		p.recorder.responseSize.Record(ctx, int64(len(res.Payload)), metric.WithAttributes(attrs...))
 	}
 
