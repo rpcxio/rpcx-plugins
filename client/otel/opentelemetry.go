@@ -18,7 +18,8 @@ import (
 )
 
 const (
-	metricRequestPath = "rpcx.client.request.path"
+	rpcClientRequestMessageKey  = "rpc.client.request.message"
+	rpcClientResponseMessageKey = "rpc.client.response."
 )
 
 type OpenTelemetryPlugin struct {
@@ -46,30 +47,30 @@ func (p *OpenTelemetryPlugin) WithMeter(meter metric.Meter) *OpenTelemetryPlugin
 
 func (p *OpenTelemetryPlugin) PreCall(ctx context.Context, servicePath, serviceMethod string, args interface{}) error {
 	spanCtx := share.Extract(ctx, p.propagators)
-	ctx0 := trace.ContextWithSpanContext(ctx, spanCtx)
+	ctx0 := trace.ContextWithSpanContext(ctx.(*rc.Context).Context, spanCtx)
 
 	spanName := fmt.Sprintf("rpcx.client.%s.%s", servicePath, serviceMethod)
 	ctx1, span := p.tracer.Start(ctx0, spanName)
-	share.Inject(ctx1, p.propagators)
 	span.AddEvent("PreCall", trace.WithAttributes(
-		attribute.String("rpc.client.request.message", fmt.Sprintf("%+v", args)),
+		attribute.String(rpcClientRequestMessageKey, fmt.Sprintf("%+v", args)),
 	))
-	ctx.(*rc.Context).SetValue(share.OpenTelemetryKey, span)
 	if p.recorder != nil {
 		attrs := []attribute.KeyValue{semconv.RPCService(servicePath), semconv.RPCMethod(serviceMethod)}
 		p.recorder.requestsCounter.Add(ctx1, 1, metric.WithAttributes(attrs...))
-		ctx.(*rc.Context).SetValue(share.OpenTelemetryStartTimeKey, time.Now().UnixMilli())
+		ctx.(*rc.Context).SetValue(share.OpenTelemetryStartTimeKey, time.Now())
 	}
+	ctx.(*rc.Context).Context = ctx1
+	share.Inject(ctx, p.propagators)
 
 	return nil
 }
 
 func (p *OpenTelemetryPlugin) PostCall(ctx context.Context, servicePath, serviceMethod string, args interface{}, reply interface{}, err error) error {
-	span := ctx.Value(share.OpenTelemetryKey).(trace.Span)
+	span := trace.SpanFromContext(ctx)
 	defer span.End()
 
 	span.AddEvent("PostCall", trace.WithAttributes(
-		attribute.String("rpc.client.response.message", fmt.Sprintf("%+v", reply)),
+		attribute.String(rpcClientResponseMessageKey, fmt.Sprintf("%+v", reply)),
 	))
 	attrs := []attribute.KeyValue{semconv.RPCService(servicePath), semconv.RPCMethod(serviceMethod)}
 	if err != nil {
@@ -81,8 +82,8 @@ func (p *OpenTelemetryPlugin) PostCall(ctx context.Context, servicePath, service
 	}
 	if p.recorder != nil {
 		p.recorder.responsesCounter.Add(ctx, 1, metric.WithAttributes(attrs...))
-		startTime := ctx.Value(share.OpenTelemetryStartTimeKey).(int64)
-		p.recorder.totalDuration.Record(ctx, time.Now().UnixMilli()-startTime, metric.WithAttributes(attrs...))
+		startTime := ctx.Value(share.OpenTelemetryStartTimeKey).(time.Time)
+		p.recorder.totalDuration.Record(ctx, int64(time.Since(startTime)/time.Millisecond), metric.WithAttributes(attrs...))
 	}
 	return nil
 }
