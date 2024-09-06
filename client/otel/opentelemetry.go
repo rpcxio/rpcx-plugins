@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	rc "github.com/smallnest/rpcx/share"
@@ -52,7 +53,7 @@ func (p *OpenTelemetryPlugin) PreCall(ctx context.Context, servicePath, serviceM
 	spanName := fmt.Sprintf("rpcx.client.%s.%s", servicePath, serviceMethod)
 	ctx1, span := p.tracer.Start(ctx0, spanName)
 	span.AddEvent("PreCall", trace.WithAttributes(
-		attribute.String(rpcClientRequestMessageKey, fmt.Sprintf("%+v", args)),
+		attribute.String(rpcClientRequestMessageKey, strings.ToValidUTF8(fmt.Sprintf("%+v", args), " ")),
 	))
 	if p.recorder != nil {
 		attrs := []attribute.KeyValue{semconv.RPCService(servicePath), semconv.RPCMethod(serviceMethod)}
@@ -70,7 +71,7 @@ func (p *OpenTelemetryPlugin) PostCall(ctx context.Context, servicePath, service
 	defer span.End()
 
 	span.AddEvent("PostCall", trace.WithAttributes(
-		attribute.String(rpcClientResponseMessageKey, fmt.Sprintf("%+v", reply)),
+		attribute.String(rpcClientResponseMessageKey, strings.ToValidUTF8(fmt.Sprintf("%+v", reply), " ")),
 	))
 	attrs := []attribute.KeyValue{semconv.RPCService(servicePath), semconv.RPCMethod(serviceMethod)}
 	if err != nil {
