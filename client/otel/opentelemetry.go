@@ -20,7 +20,7 @@ import (
 
 const (
 	rpcClientRequestMessageKey  = "rpc.client.request.message"
-	rpcClientResponseMessageKey = "rpc.client.response."
+	rpcClientResponseMessageKey = "rpc.client.response.message"
 )
 
 type OpenTelemetryPlugin struct {
@@ -51,12 +51,17 @@ func (p *OpenTelemetryPlugin) PreCall(ctx context.Context, servicePath, serviceM
 	ctx0 := trace.ContextWithSpanContext(ctx.(*rc.Context).Context, spanCtx)
 
 	spanName := fmt.Sprintf("rpcx.client.%s.%s", servicePath, serviceMethod)
-	ctx1, span := p.tracer.Start(ctx0, spanName)
+
+	attrs := []attribute.KeyValue{
+		semconv.RPCSystemKey.String("rpcx"),
+		semconv.RPCService(servicePath),
+		semconv.RPCMethod(serviceMethod),
+	}
+	ctx1, span := p.tracer.Start(ctx0, spanName, trace.WithAttributes(attrs...))
 	span.AddEvent("PreCall", trace.WithAttributes(
 		attribute.String(rpcClientRequestMessageKey, strings.ToValidUTF8(fmt.Sprintf("%+v", args), " ")),
 	))
 	if p.recorder != nil {
-		attrs := []attribute.KeyValue{semconv.RPCService(servicePath), semconv.RPCMethod(serviceMethod)}
 		p.recorder.requestsCounter.Add(ctx1, 1, metric.WithAttributes(attrs...))
 		ctx.(*rc.Context).SetValue(share.OpenTelemetryStartTimeKey, time.Now())
 	}
@@ -73,7 +78,11 @@ func (p *OpenTelemetryPlugin) PostCall(ctx context.Context, servicePath, service
 	span.AddEvent("PostCall", trace.WithAttributes(
 		attribute.String(rpcClientResponseMessageKey, strings.ToValidUTF8(fmt.Sprintf("%+v", reply), " ")),
 	))
-	attrs := []attribute.KeyValue{semconv.RPCService(servicePath), semconv.RPCMethod(serviceMethod)}
+	attrs := []attribute.KeyValue{
+		semconv.RPCSystemKey.String("rpcx"),
+		semconv.RPCService(servicePath),
+		semconv.RPCMethod(serviceMethod),
+	}
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 		attrs = append(attrs, semconv.OTelStatusCodeError)
@@ -82,9 +91,10 @@ func (p *OpenTelemetryPlugin) PostCall(ctx context.Context, servicePath, service
 		attrs = append(attrs, semconv.OTelStatusCodeError)
 	}
 	if p.recorder != nil {
-		p.recorder.responsesCounter.Add(ctx, 1, metric.WithAttributes(attrs...))
+		metricAttrs := metric.WithAttributes(attrs...)
+		p.recorder.responsesCounter.Add(ctx, 1, metricAttrs)
 		startTime := ctx.Value(share.OpenTelemetryStartTimeKey).(time.Time)
-		p.recorder.totalDuration.Record(ctx, int64(time.Since(startTime)/time.Millisecond), metric.WithAttributes(attrs...))
+		p.recorder.totalDuration.Record(ctx, int64(time.Since(startTime)/time.Millisecond), metricAttrs)
 	}
 	return nil
 }
