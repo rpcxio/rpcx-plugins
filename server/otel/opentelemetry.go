@@ -38,10 +38,8 @@ const (
 	tracingEventRpcxPreHandleRequest          = "rpcx.pre.handle.request"
 	tracingEventRpcxPreHandleRequestPath      = "rpcx.pre.handle.request.path"
 	tracingEventRpcxPreHandleRequestMetadata  = "rpcx.pre.handle.request.metadata"
-	tracingEventRpcxPreHandleRequestPayload   = "rpcx.pre.handle.request.payload"
 	tracingEventRpcxPostWriteResponse         = "rpcx.post.write.response"
 	tracingEventRpcxPostWriteResponseMetadata = "rpcx.post.write.response.metadata"
-	tracingEventRpcxPostWriteResponsePayload  = "rpcx.post.write.response.payload"
 )
 
 func NewOpenTelemetryPlugin(tracer trace.Tracer, propagators propagation.TextMapPropagator) *OpenTelemetryPlugin {
@@ -110,7 +108,6 @@ func (p OpenTelemetryPlugin) PreHandleRequest(ctx context.Context, r *protocol.M
 	span.AddEvent(tracingEventRpcxPreHandleRequest, trace.WithAttributes(
 		attribute.String(tracingEventRpcxPreHandleRequestPath, spanName),
 		attribute.String(tracingEventRpcxPreHandleRequestMetadata, strings.ToValidUTF8(fmt.Sprintf("%+v", r.Metadata), " ")),
-		attribute.String(tracingEventRpcxPreHandleRequestPayload, strings.ToValidUTF8(string(r.Payload), " ")),
 	))
 	if p.recorder != nil {
 		attrs := metric.WithAttributes(semconv.RPCService(r.ServicePath), semconv.RPCMethod(r.ServiceMethod))
@@ -131,7 +128,6 @@ func (p OpenTelemetryPlugin) PostWriteResponse(ctx context.Context, req *protoco
 
 	span.AddEvent(tracingEventRpcxPostWriteResponse, trace.WithAttributes(
 		attribute.String(tracingEventRpcxPostWriteResponseMetadata, strings.ToValidUTF8(fmt.Sprintf("%+v", res.Metadata), " ")),
-		attribute.String(tracingEventRpcxPostWriteResponsePayload, strings.ToValidUTF8(string(res.Payload), " ")),
 	))
 
 	attrs := []attribute.KeyValue{semconv.RPCService(req.ServicePath), semconv.RPCMethod(req.ServiceMethod)}
