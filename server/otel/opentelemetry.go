@@ -100,19 +100,26 @@ func (p OpenTelemetryPlugin) PreHandleRequest(ctx context.Context, r *protocol.M
 	ctx0 := trace.ContextWithRemoteSpanContext(ctx.(*rc.Context).Context, spanCtx)
 
 	spanName := fmt.Sprintf("rpcx.service.%s.%s", r.ServicePath, r.ServiceMethod)
+
+	attrs := []attribute.KeyValue{
+		semconv.RPCSystemKey.String("rpcx"),
+		semconv.RPCService(r.ServicePath),
+		semconv.RPCMethod(r.ServiceMethod),
+	}
 	ctx1, span := p.tracer.Start(
 		ctx0,
 		spanName,
 		trace.WithSpanKind(trace.SpanKindServer),
+		trace.WithAttributes(attrs...),
 	)
 	span.AddEvent(tracingEventRpcxPreHandleRequest, trace.WithAttributes(
 		attribute.String(tracingEventRpcxPreHandleRequestPath, spanName),
 		attribute.String(tracingEventRpcxPreHandleRequestMetadata, strings.ToValidUTF8(fmt.Sprintf("%+v", r.Metadata), " ")),
 	))
 	if p.recorder != nil {
-		attrs := metric.WithAttributes(semconv.RPCService(r.ServicePath), semconv.RPCMethod(r.ServiceMethod))
-		p.recorder.requestsCounter.Add(ctx1, 1, attrs)
-		p.recorder.requestSize.Record(ctx1, int64(len(r.Payload)), attrs)
+		metricAttrs := metric.WithAttributes(attrs...)
+		p.recorder.requestsCounter.Add(ctx1, 1, metricAttrs)
+		p.recorder.requestSize.Record(ctx1, int64(len(r.Payload)), metricAttrs)
 		ctx.(*rc.Context).SetValue(share.OpenTelemetryStartTimeKey, time.Now())
 	}
 
@@ -130,7 +137,11 @@ func (p OpenTelemetryPlugin) PostWriteResponse(ctx context.Context, req *protoco
 		attribute.String(tracingEventRpcxPostWriteResponseMetadata, strings.ToValidUTF8(fmt.Sprintf("%+v", res.Metadata), " ")),
 	))
 
-	attrs := []attribute.KeyValue{semconv.RPCService(req.ServicePath), semconv.RPCMethod(req.ServiceMethod)}
+	attrs := []attribute.KeyValue{
+		semconv.RPCSystemKey.String("rpcx"),
+		semconv.RPCService(req.ServicePath),
+		semconv.RPCMethod(req.ServiceMethod),
+	}
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 		attrs = append(attrs, semconv.OTelStatusCodeError)
@@ -140,10 +151,11 @@ func (p OpenTelemetryPlugin) PostWriteResponse(ctx context.Context, req *protoco
 	}
 
 	if p.recorder != nil {
-		p.recorder.responsesCounter.Add(ctx, 1, metric.WithAttributes(attrs...))
+		metricAttrs := metric.WithAttributes(attrs...)
+		p.recorder.responsesCounter.Add(ctx, 1, metricAttrs)
 		startTime := ctx.Value(share.OpenTelemetryStartTimeKey).(time.Time)
-		p.recorder.totalDuration.Record(ctx, int64(time.Since(startTime)/time.Millisecond), metric.WithAttributes(attrs...))
-		p.recorder.responseSize.Record(ctx, int64(len(res.Payload)), metric.WithAttributes(attrs...))
+		p.recorder.totalDuration.Record(ctx, int64(time.Since(startTime)/time.Millisecond), metricAttrs)
+		p.recorder.responseSize.Record(ctx, int64(len(res.Payload)), metricAttrs)
 	}
 
 	return nil
