@@ -20,7 +20,7 @@ import (
 
 const (
 	rpcClientRequestMessageKey  = "rpc.client.request.message"
-	rpcClientResponseMessageKey = "rpc.client.response."
+	rpcClientResponseMessageKey = "rpc.client.response.message"
 )
 
 type OpenTelemetryPlugin struct {
